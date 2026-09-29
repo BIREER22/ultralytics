@@ -28,7 +28,7 @@ graph TB
 
 ## Create Project
 
-Navigate to **Projects** in the sidebar and click **New Project**.
+Open **Train** in the sidebar and click the `+` to open the **New Project** dialog.
 
 ![Ultralytics Platform Projects List](https://cdn.ul.run/i/11ba0c7e59d846cbc7bde563701bc141.avif)<!-- screenshot -->
 
@@ -254,4 +254,4 @@ Yes, deleted projects go to Trash and can be restored within 30 days:
 
 ### Can I transfer models between projects?
 
-Yes, you can clone a model to a different project using the clone model dialog from the [model page](models.md#clone-model).
+Yes. Cut and paste or drag models between projects in the same workspace; see [Move Models Between Projects](models.md#move-models-between-projects). [Clone Model](models.md#clone-model) copies a completed model you do not own into your project instead.

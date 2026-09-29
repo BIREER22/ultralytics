@@ -26,7 +26,7 @@ graph LR
 
 !!! info "Anonymous Access"
 
-    The Explore page works without signing in. Signed-out visitors get **Datasets** and **Models** sections in the sidebar listing official `@ultralytics` content, in place of the **Annotate**, **Train**, and **Deploy** sections that hold your own work. Public models can even be tested in the browser from their `Predict` tab. To clone content or create your own, you'll need to sign up.
+    The Explore page works without signing in. Signed-out visitors get **Datasets** and **Models** sections in the sidebar listing official `@ultralytics` content, in place of the **Annotate**, **Train**, and **Deployments** sections that hold your own work. Public models can even be tested in the browser from their `Predict` tab. To clone content or create your own, you'll need to sign up.
 
 ## Overview
 
@@ -182,7 +182,7 @@ Use a public dataset for your training:
     - The destination slug is auto-renamed if the name is already taken in your workspace
     - You can modify classes, annotations, and splits
     - Changes don't affect the original dataset
-    - Image bytes reuse content-addressable storage (CAS), but the clone still counts toward the destination workspace's storage quota
+    - Image files are reused rather than copied, but the clone still counts toward the destination workspace's storage quota
 
 See [Datasets](data/datasets.md) for managing and annotating your cloned dataset.
 

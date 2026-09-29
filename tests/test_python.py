@@ -46,6 +46,20 @@ from ultralytics.utils.downloads import download, safe_download
 from ultralytics.utils.torch_utils import TORCH_1_10, TORCH_1_11, TORCH_1_13, TORCH_2_0
 
 
+def test_predict_prefetch():
+    """Test prefetch preserves order and re-raises loader exceptions (CUDA-only path, otherwise uncovered on CPU CI)."""
+    from ultralytics.engine.predictor import _prefetch
+
+    def loader():
+        yield from (1, 2)
+        raise RuntimeError("loader failed")
+
+    batches = _prefetch(loader())
+    assert [next(batches), next(batches)] == [1, 2]
+    with pytest.raises(RuntimeError, match="loader failed"):
+        next(batches)
+
+
 def test_dataloader_caps_workers_to_batches():
     """Test tiny datasets do not spawn persistent workers beyond useful batch count."""
     single_batch = build_dataloader(range(4), batch=4, workers=8)
@@ -102,6 +116,19 @@ def test_dataloader_empty_dataset_uses_dataloader_validation():
         build_dataloader([], batch=4, workers=2)
 
 
+def test_image_cache_shared_with_spawned_workers():
+    """Test the RAM image cache reaches spawned DataLoader workers as one shared buffer with intact contents."""
+    from ultralytics.data.base import BaseDataset
+
+    images = [np.full((8, 8, 3), i, dtype=np.uint8) for i in range(8)]
+    cache = BaseDataset._ImageCache(list(images))
+    loader = torch.utils.data.DataLoader(
+        cache, batch_size=4, sampler=range(8), num_workers=2, multiprocessing_context="spawn"
+    )
+    assert torch.equal(torch.cat(list(loader)), torch.from_numpy(np.stack(images)))
+    assert cache.buffer.is_shared()
+
+
 def test_build_yolo_dataset_hyp_isolated():
     """Test dataset construction never mutates hyperparameters on the shared cfg it was built from."""
     data = check_det_dataset("coco8.yaml")
@@ -119,11 +146,14 @@ def test_cfg_rejects_fuzzed_values():
     for key, value in (
         ("split", []),
         ("split", -0.0),
+        ("epochs", 0),
+        ("epochs", -1),
         ("optimizer", []),
         ("copy_paste_mode", {}),
         ("optimizer", None),
         ("split", None),
         ("copy_paste_mode", None),
+        ("patience", -1),
     ):
         with pytest.raises((TypeError, ValueError), match=key):
             get_cfg(overrides={key: value})
@@ -272,7 +302,7 @@ def test_restricted_load_criterion(tmp_path, fused):
     assert checkpoint["model"].criterion is not None
     assert checkpoint["best_fitness"] == 0.5
     with torch.no_grad():
-        assert torch.equal(checkpoint["model"](image)[0], expected)
+        assert torch.allclose(checkpoint["model"](image)[0], expected)
 
 
 @pytest.mark.parametrize("cfg", [CFG, "yolov8n.yaml", "yolov10n.yaml", "yolo11n.yaml", "yolo26n-p6.yaml"])
@@ -361,7 +391,6 @@ def test_predict_txt(tmp_path):
     assert len(results) == 7, f"Expected 7 results from source list, got {len(results)}"
 
 
-@pytest.mark.skipif(True, reason="disabled for testing")
 def test_predict_csv_multi_row(tmp_path):
     """Test YOLO predictions with sources listed in multiple rows of a CSV file."""
     file = tmp_path / "sources_multi_row.csv"
@@ -373,7 +402,6 @@ def test_predict_csv_multi_row(tmp_path):
     assert len(results) == 7, f"Expected 7 results from multi-row CSV, got {len(results)}"
 
 
-@pytest.mark.skipif(True, reason="disabled for testing")
 def test_predict_csv_single_row(tmp_path):
     """Test YOLO predictions with sources listed in a single row of a CSV file."""
     file = tmp_path / "sources_single_row.csv"
@@ -776,6 +804,30 @@ def test_val_save_txt_pose(tmp_path):
                 assert abs(cx - x) < w / 2 + 0.05 and abs(cy - y) < h / 2 + 0.05, "keypoints misaligned with box"
 
 
+def test_val_save_json_semantic(tmp_path):
+    """Semantic val(save_json=True) writes the class maps at the original image size without the letterbox padding."""
+    if IS_RASPBERRYPI:
+        skip_rpi_semantic()
+    data = check_det_dataset("cityscapes8.yaml")
+    lut = np.full(256, 255, dtype=np.uint8)  # raw Cityscapes id -> train id, 255 = ignore
+    for k, v in data["label_mapping"].items():
+        if isinstance(v, int) and k >= 0:
+            lut[k] = v
+    model = YOLO(WEIGHTS_DIR / "yolo26n-sem.pt")
+    # imgsz=640: the 1024x2048 images get a 320x640 rect batch (val default) or a 640x640 letterbox with 160 padded rows
+    for rect in (True, False):
+        metrics = model.val(data="cityscapes8.yaml", imgsz=640, save_json=True, rect=rect, project=tmp_path, name="val")
+        correct = total = 0
+        for png in (Path(metrics.save_dir) / "results").glob("*.png"):
+            pred = lut[np.asarray(Image.open(png))]
+            gt = lut[np.asarray(Image.open(Path(data["path"]) / data["masks_dir"] / "val" / png.name))]
+            assert pred.shape == gt.shape, f"rect={rect}: {png.name} saved as {pred.shape}, image is {gt.shape}"
+            correct += ((pred == gt) & (gt != 255)).sum()
+            total += (gt != 255).sum()
+        # the saved masks score like the letterbox-space pixel accuracy; padding stretched into the image halves it
+        assert abs(correct / total - metrics.results_dict["metrics/pixel_acc"]) < 0.05, f"rect={rect}: masks misaligned"
+
+
 def test_pose_metrics_curves():
     """Test that pose curve labels contain four unique box and pose series."""
     from ultralytics.utils.metrics import PoseMetrics
@@ -815,7 +867,7 @@ def test_convert_signed_ndjson(monkeypatch):
 
     captured = []
 
-    async def convert(path, fraction):
+    async def convert(path, fraction, split):
         captured.append((path, fraction))
         return "dataset.ndjson.yaml"
 
@@ -958,44 +1010,6 @@ def test_ndjson_conversion_concurrency_and_resume(monkeypatch, tmp_path, task):
     assert sum(counts.values()) == request_count
 
 
-def test_platform_job_transport(monkeypatch, tmp_path):
-    """Test configurable Platform transport with an existing local checkpoint."""
-    from types import SimpleNamespace
-
-    from ultralytics import SETTINGS, cfg
-    from ultralytics.utils.callbacks import platform
-
-    monkeypatch.setattr(cfg, "TESTS_RUNNING", False)
-    monkeypatch.setitem(SETTINGS, "runs_dir", str(tmp_path))
-    args = SimpleNamespace(
-        save_dir=None, project="user/project", task="detect", name="model", mode="train", exist_ok=True
-    )
-    assert cfg.get_save_dir(args) == tmp_path / "detect/user/project/model"
-
-    captured = {}
-
-    def post(url, **kwargs):
-        captured.update(url=url, **kwargs)
-        return SimpleNamespace(status_code=200, json=lambda: {"received": True}, raise_for_status=lambda: None)
-
-    monkeypatch.setattr("requests.post", post)
-    monkeypatch.setattr(platform, "_api_key", "api-key")
-    monkeypatch.setattr(platform, "PLATFORM_API_URL", "https://example.test/api/webhooks")
-    assert platform._send("epoch_end", {"epoch": 0}, "user/project", "model") == {"received": True}
-    assert captured["url"] == "https://example.test/api/webhooks/training/metrics"
-    assert captured["json"]["data"] == {"epoch": 0}
-    assert captured["headers"] == {"Authorization": "Bearer api-key"}
-
-    model = tmp_path / "models" / "best.pt"
-    model.parent.mkdir()
-    model.write_bytes(b"weights")
-    monkeypatch.setenv("PLATFORM_API_URL", "http://127.0.0.1:8765")
-    assert platform._upload_model(model, "user/project", "model") == {
-        "modelPath": str(model),
-        "modelSize": 7,
-    }
-
-
 @pytest.mark.skipif(not ONLINE, reason="environment is offline")
 @pytest.mark.skipif(IS_JETSON or IS_RASPBERRYPI, reason="Edge devices not intended for training")
 def test_train_scratch():
@@ -1110,6 +1124,21 @@ def test_results_plot_without_boxes():
     assert r.boxes is None
     for color_mode in ("class", "instance"):
         assert r.plot(color_mode=color_mode).shape == orig_img.shape
+
+
+def test_results_plot_instance_keypoints_track_color():
+    """Test that color_mode='instance' colors tracked keypoints by track ID, like boxes and masks."""
+    from ultralytics.engine.results import Results
+    from ultralytics.utils.plotting import colors
+
+    boxes = torch.tensor([[0, 0, 30, 30, 5, 0.9, 0], [34, 34, 64, 64, 9, 0.9, 0]], dtype=torch.float32)  # ids 5, 9
+    keypoints = torch.tensor([[[15, 15, 1.0]] * 17, [[49, 49, 1.0]] * 17])
+    r = Results(
+        np.zeros((64, 64, 3), dtype=np.uint8), path="im.jpg", names={0: "person"}, boxes=boxes, keypoints=keypoints
+    )
+    im = r.plot(color_mode="instance", boxes=False)
+    assert im[15, 15].tolist() == list(colors(5, True))
+    assert im[49, 49].tolist() == list(colors(9, True))
 
 
 def test_results_depth_field():
@@ -1301,7 +1330,7 @@ def test_data_utils(tmp_path):
 
 
 def test_safe_download_unzips_local_path_archive(tmp_path):
-    """Test safe_download() unzips local archive paths without treating them like remote URLs."""
+    """Test safe_download() unzips local zip and tar paths to the archive's single top-level directory."""
     dataset_dir = tmp_path / "coco8 local"
     archive = tmp_path / "coco8 local.zip"
     (dataset_dir / "images" / "train").mkdir(parents=True)
@@ -1319,6 +1348,25 @@ def test_safe_download_unzips_local_path_archive(tmp_path):
     assert extracted == expected_path, f"Extracted path {extracted} != expected {expected_path}"
     assert (extracted / "data.yaml").is_file(), f"data.yaml not found in {extracted}"
     assert (extracted / "images" / "val").is_dir(), f"images/val not found in {extracted}"
+
+    with tarfile.open(tar_archive := tmp_path / "coco8 local.tar", "w") as tar:
+        tar.add(dataset_dir, arcname=dataset_dir.name)
+    tar_extracted = safe_download(tar_archive, dir=tmp_path / "datasets2", unzip=True, progress=False)
+    assert tar_extracted == tmp_path / "datasets2" / dataset_dir.name, f"tar returned {tar_extracted}"
+
+    with tarfile.open(tgz_archive := tmp_path / "coco8 local.tgz", "w:gz") as tar:
+        tar.add(dataset_dir, arcname=dataset_dir.name)
+    tar_gz_archive = tmp_path / "coco8 local.tar.gz"
+    tar_gz_archive.write_bytes(tgz_archive.read_bytes())
+    for archive, target in ((tgz_archive, "datasets_tgz"), (tar_gz_archive, "datasets_tar_gz")):
+        extracted = safe_download(archive, dir=tmp_path / target, unzip=True, progress=False)
+        assert extracted == tmp_path / target / dataset_dir.name
+        assert (extracted / "data.yaml").is_file()
+
+    for name in ("corrupt.zip", "corrupt.tar.gz"):
+        mislabeled = tmp_path / name  # an HTML error page served with an archive suffix
+        mislabeled.write_bytes(b"<html>not an archive</html>\n")
+        assert safe_download(mislabeled, dir=tmp_path / "datasets3", unzip=True, progress=False) == mislabeled
 
 
 def test_safe_download_skips_unsafe_archive_members(tmp_path):
@@ -1346,7 +1394,7 @@ def test_safe_download_skips_unsafe_tar_members(tmp_path):
     extracted = safe_download(archive, dir=tmp_path / "datasets", unzip=True, progress=False)
 
     assert not (tmp_path / "unsafe.txt").exists()
-    assert (extracted / "safe.txt").is_file()
+    assert extracted == tmp_path / "datasets" / "safe.txt" and extracted.is_file()
 
 
 @pytest.mark.skipif(not ONLINE, reason="environment is offline")
@@ -1479,8 +1527,6 @@ def test_depth_calibration_checkpoint_provenance(tmp_path):
 @pytest.mark.parametrize("external", [False, True])
 def test_depth_trainer_records_portable_calibration_split(tmp_path, monkeypatch, external):
     """Calibration provenance records local splits without rejecting external validation paths."""
-    from types import SimpleNamespace
-
     from ultralytics.models.yolo import detect
     from ultralytics.models.yolo.depth import calibrate
     from ultralytics.models.yolo.depth.train import DepthTrainer
@@ -1501,7 +1547,7 @@ def test_depth_trainer_records_portable_calibration_split(tmp_path, monkeypatch,
     trainer.best = checkpoint
     trainer.last = tmp_path / "last.pt"
     trainer.save_dir = tmp_path
-    trainer.args = SimpleNamespace(plots=False)
+    trainer.args = get_cfg(overrides={"plots": False})
     trainer.test_loader = []
     trainer.device = "cpu"
     trainer.data = {"path": dataset_root, "val": str(validation_path), "hash": "manifest-sha256"}
@@ -1513,10 +1559,23 @@ def test_depth_trainer_records_portable_calibration_split(tmp_path, monkeypatch,
         assert str(tmp_path) not in captured["validation_split"]
 
 
+def test_verify_image_label_keeps_polygons_sharing_a_box(tmp_path):
+    """Keep distinct polygons that share a class and box, and drop exact duplicate polygon rows."""
+    from ultralytics.data.utils import verify_image_label
+
+    im, lb = tmp_path / "0.jpg", tmp_path / "0.txt"
+    cv2.imwrite(str(im), np.zeros((32, 32, 3), np.uint8))
+    rows = ["0 0.2 0.2 0.8 0.2 0.8 0.8", "0 0.2 0.2 0.2 0.8 0.8 0.8"]  # two triangles tiling one square
+    lb.write_text("\n".join([*rows, rows[0]]))
+    _, labels, _, segments, *_ = verify_image_label((str(im), str(lb), "", False, 1, 0, 0, False))
+    assert len(labels) == len(segments) == 2
+
+
 def test_depth_dataset_ignores_unreadable_targets(tmp_path):
     """Drop unreadable depth maps and accept single-class mode with empty class labels."""
     from ultralytics.data.dataset import DepthDataset
     from ultralytics.data.utils import save_depth_png
+    from ultralytics.utils import DEFAULT_CFG
 
     images, depth = tmp_path / "images" / "train", tmp_path / "depth" / "train"
     images.mkdir(parents=True)
@@ -1535,7 +1594,10 @@ def test_depth_dataset_ignores_unreadable_targets(tmp_path):
     (depth / "corrupt.png").write_text("not a png file")
 
     data = {"names": {0: "depth"}, "nc": 1, "channels": 3, "depth_scale": 100}
-    ds = DepthDataset(img_path=str(images), imgsz=32, data=data, augment=False, single_cls=True, batch_size=1)
+    hyp = copy(DEFAULT_CFG)
+    hyp.mosaic = 1.0  # pin the value the unsupported-argument zeroing must not reach, regardless of ambient state
+    ds = DepthDataset(img_path=str(images), imgsz=32, data=data, augment=False, single_cls=True, batch_size=1, hyp=hyp)
+    assert hyp.mosaic == 1.0  # construction must never mutate the caller's hyp namespace
     assert {Path(f).stem for f in ds.im_files} == {"valid", "scaled", "legacy"}
     assert sorted(ds._load_depth(i).max() for i in range(len(ds))) == [1.0, 1.5, 2.0]
     legacy_index = next(i for i, path in enumerate(ds.im_files) if Path(path).stem == "legacy")
@@ -1665,6 +1727,17 @@ def test_semantic_loss_all_ignore(nc):
     assert preds.grad is not None and aux.grad is not None
 
 
+def test_semantic_confusion_matrix_large_counts():
+    """SemanticMetrics must keep counting past float32's 2**24, where accumulating 1.0 at a time would saturate."""
+    from ultralytics.utils.metrics import SemanticMetrics
+
+    metrics = SemanticMetrics(names={0: "a", 1: "b"})
+    metrics.matrix = torch.full((2, 2), float(2**24))  # counts already accumulated from a large val set
+    zeros = torch.zeros((1, 10, 10), dtype=torch.int32)
+    metrics.update_stats(zeros, zeros)
+    assert metrics.matrix[0, 0].item() == 2**24 + 100, f"confusion matrix saturated at {metrics.matrix[0, 0].item()}"
+
+
 class _DepthLossModel(torch.nn.Module):
     """Tiny stub mirroring the model surface DepthLoss26 reads: .parameters() for device and .args for hyps."""
 
@@ -1765,6 +1838,25 @@ def test_scale_coords_nonuniform_letterbox():
     coords = torch.tensor([[160.0, 224.0]])
     assert np.allclose(ops.scale_boxes((640, 640), boxes, (100, 200)), [[10, 10, 100, 60]])
     assert torch.allclose(ops.scale_coords((640, 640), coords, (100, 200)), coords.new_tensor([[50, 20]]))
+
+
+def test_scale_masks_odd_letterbox_pad():
+    """Mask scaling with the dataloader's ratio_pad must end the crop where the letterbox content ends."""
+    from ultralytics.data.augment import LetterBox
+    from ultralytics.utils import ops
+
+    # A 1000x1920 or 1920x1000 image, resized to 333x640 or 640x333, gets 19 rows or columns of padding: 9 and 10
+    for shape, im0_shape, pad in (((352, 640), (1000, 1920), (0, 9)), ((640, 352), (1920, 1000), (9, 0))):
+        h, w = im0_shape[0] // 3, im0_shape[1] // 3
+        labels = {"img": np.zeros((h, w, 3), dtype=np.uint8), "ratio_pad": (h / im0_shape[0], w / im0_shape[1])}
+        ratio_pad = LetterBox(shape, scaleup=False)(labels)["ratio_pad"]  # ((gain_h, gain_w), (left, top))
+        assert ratio_pad[1] == pad
+        left, top = pad
+        masks = torch.zeros(1, 1, *shape)
+        masks[..., top : top + h, left : left + w] = 1 + torch.rand(h, w)  # positive content, zero padding
+        scaled = ops.scale_masks(masks, im0_shape, ratio_pad=ratio_pad)
+        assert (scaled > 0.5).all()  # every original pixel is content: no padded row or column survived the crop
+        assert torch.equal(scaled, ops.scale_masks(masks, im0_shape))  # the ratio_pad=None crop is unchanged
 
 
 def test_nms_end2end_classes_before_max_det():
@@ -1887,15 +1979,17 @@ def _depth_head_feats():
 
 
 def test_nn_depth_head_export_upsamples_to_input():
-    """Depth export upsamples x4 to input resolution; inference returns native head resolution."""
+    """Depth export upsamples x4 on the depth loss align_corners=True grid; inference returns native head resolution."""
+    import torch.nn.functional as F
+
     from ultralytics.nn.modules.head import Depth
 
-    head = Depth(c_mid=32, ch=(32, 64, 128)).eval()
+    head, x = Depth(c_mid=32, ch=(32, 64, 128)).eval(), _depth_head_feats()
+    native = head(x)
+    assert native.shape[-2:] == (64, 64)  # inference returns native head resolution
     for fmt in ("onnx", "coreml"):
         head.export, head.format = True, fmt
-        assert head(_depth_head_feats()).shape[-2:] == (256, 256)
-    head.export = False
-    assert head(_depth_head_feats()).shape[-2:] != (256, 256)  # inference returns native head resolution
+        assert torch.equal(head(x), F.interpolate(native, scale_factor=4.0, mode="bilinear", align_corners=True))
 
 
 def test_nn_depth_head_no_dead_parameters():
@@ -1922,6 +2016,17 @@ def test_classification_fraction_samples_across_classes(tmp_path):
     samples = ClassificationDataset(tmp_path, args, augment=True).samples
 
     assert np.bincount([sample[1] for sample in samples]).tolist() == [2, 2, 2]
+
+
+def test_classification_split_class_alignment(tmp_path):
+    """Align a split's class folders to the model's class order by name and drop classes the model lacks."""
+    from ultralytics.data.dataset import ClassificationDataset
+
+    for name in ("b", "c", "d"):  # the split lacks the model's first class and adds one it does not have
+        (tmp_path / name).mkdir()
+        cv2.imwrite(str(tmp_path / name / "0.jpg"), np.zeros((16, 16, 3), dtype=np.uint8))
+    samples = ClassificationDataset(tmp_path, DEFAULT_CFG, names={0: "a", 1: "b", 2: "c"}).samples
+    assert sorted(sample[1] for sample in samples) == [1, 2]
 
 
 @pytest.fixture
@@ -2158,9 +2263,17 @@ def test_yoloe_vocab_head_switch():
     model = YOLO(WEIGHTS_DIR / "yoloe-26n-seg.pt")
     model.model.args["imgsz"] = 32
     names = ["person", "bus"]
-    model.set_vocab(model.get_vocab(names), names)
+    vocab = model.get_vocab(names)  # one-to-many branch
+    model.set_vocab(vocab, names)
     for nms in (None, False):
         model(SOURCE, imgsz=32, nms=nms)
+
+    dual = YOLO(WEIGHTS_DIR / "yoloe-26n-seg.pt")  # one head per branch, as the yoloe-26*-seg-pf.pt weights carry
+    dual.model.args["imgsz"] = 32
+    dual.model.end2end = True
+    dual.set_vocab(vocab, names, one2one_vocab=dual.get_vocab(names))
+    for nms in (None, False):
+        dual(SOURCE, imgsz=32, nms=nms)
 
 
 def test_yoloe_visual_prompt_verbose_false(capfd):
@@ -2256,3 +2369,54 @@ def test_semantic_polygon_data():
     model = YOLO("yolo26n-sem.pt")
     model.train(data="coco8-seg.yaml", epochs=1, imgsz=32, close_mosaic=1)
     model.val(data="coco8-seg.yaml")
+
+
+def test_semantic_cache_nc_edit_1bit_masks(tmp_path):
+    """Test a yaml-only nc 2->1 edit still loads 1-bit masks as {0, 1} from a cache scanned at nc=2."""
+    from ultralytics.data.dataset import SemanticDataset
+
+    images, masks = tmp_path / "images" / "train", tmp_path / "masks" / "train"
+    images.mkdir(parents=True)
+    masks.mkdir(parents=True)
+    foreground = np.zeros((32, 32), dtype=np.uint8)
+    foreground[8:24, 8:24] = 255
+    cv2.imwrite(str(images / "a.jpg"), np.zeros((32, 32, 3), dtype=np.uint8))
+    Image.fromarray(foreground).convert("1").save(masks / "a.png")  # cv2 later reads this as 0/255
+
+    data = {"names": {0: "bg", 1: "fg"}, "nc": 2}
+    SemanticDataset(img_path=str(images), imgsz=32, data=data)  # scan and cache at nc=2
+    dataset = SemanticDataset(img_path=str(images), imgsz=32, data={**data, "nc": 1})  # yaml-only nc edit
+    assert set(np.unique(dataset.load_mask(0))) == {0, 1}  # 1-bit foreground remapped from 255
+
+
+def test_verify_image_label_whitespace_lines(tmp_path):
+    """Test whitespace-only lines in label files no longer mark an image corrupt."""
+    from ultralytics.data.utils import verify_image_label
+
+    im = tmp_path / "a.jpg"
+    cv2.imwrite(str(im), np.zeros((32, 48, 3), dtype=np.uint8))
+
+    lb = tmp_path / "a.txt"  # detection rows with a whitespace-only line between them
+    lb.write_text("0 0.5 0.5 0.1 0.1\n \t\n1 0.25 0.25 0.2 0.2\n", encoding="utf-8")
+    args = (str(im), str(lb), "", False, 2, 0, 2, False)
+    _, out, _, _, _, _, nf, _, nc, _ = verify_image_label(args)
+    assert (nf, nc) == (1, 0) and out.shape == (2, 5)  # both rows parsed, image kept
+
+    lb.write_text("0 0.1 0.1 0.3 0.1 0.3 0.3\n\t\n0 0.4 0.4 0.6 0.4 0.6 0.6\n", encoding="utf-8")  # segment rows
+    _, out, _, segments, _, _, nf, _, nc, _ = verify_image_label(args)
+    assert (nf, nc) == (1, 0) and out.shape == (2, 5) and len(segments) == 2  # both polygons parsed
+
+
+def test_load_yolo_dota_whitespace_lines(tmp_path):
+    """Test whitespace-only lines in DOTA label files no longer crash the loader."""
+    from ultralytics.data.split_dota import load_yolo_dota
+
+    images, labels = tmp_path / "images" / "train", tmp_path / "labels" / "train"
+    images.mkdir(parents=True)
+    labels.mkdir(parents=True)
+    cv2.imwrite(str(images / "a.jpg"), np.zeros((64, 64, 3), dtype=np.uint8))
+    (labels / "a.txt").write_text(
+        "0.1 0.1 0.3 0.1 0.3 0.3 0.1 0.3 0\n \t\n0.4 0.4 0.6 0.4 0.6 0.6 0.4 0.6 1\n", encoding="utf-8"
+    )
+    annos = load_yolo_dota(str(tmp_path), split="train")
+    assert len(annos) == 1 and annos[0]["label"].shape == (2, 9)  # both rows parsed

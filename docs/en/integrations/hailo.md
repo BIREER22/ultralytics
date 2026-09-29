@@ -315,6 +315,8 @@ Choose an export format based on the hardware that will execute the model. HEF i
 | Apple hardware                         | [CoreML](coreml.md)            | Uses the Apple Neural Engine, GPU, and CPU through the native Apple runtime                          |
 | Qualcomm Snapdragon NPU                | [QNN](qnn.md)                  | Compiles for Qualcomm's on-device NPU rather than requiring an external accelerator                  |
 | Rockchip NPU                           | [RKNN](rockchip-rknn.md)       | Widely used across affordable SBCs and embedded systems                                              |
+| Huawei Ascend NPU                      | [Ascend](ascend.md)            | Compiles a CANN `.om` model for the Ascend AI Core on Atlas boards and OrangePi AIPro                |
+| Google Coral Edge TPU                  | [Edge TPU](edge-tpu.md)        | Runs an INT8 LiteRT model on the Coral accelerator instead of a Hailo module                         |
 | Ambarella CVflow SoC                   | [Ambarella](ambarella.md)      | Compiles for Ambarella camera and embedded-vision SoCs                                               |
 | Raspberry Pi AI Camera                 | [Sony IMX500](sony-imx500.md)  | Runs the network in the camera sensor rather than through a host-attached Hailo accelerator          |
 | Mobile or embedded CPU/GPU             | [NCNN](ncnn.md)                | Provides a lightweight portable runtime when a dedicated supported NPU is unavailable                |
@@ -346,6 +348,7 @@ Model and pipeline choices often matter more than compiler flags:
 | `simplify` | `bool`                    | `True`    | Simplify the intermediate ONNX graph                                                                                                                                        |
 | `conf`     | `float`                   | `0.25`    | YOLOv8/YOLO11 HailoRT NMS confidence threshold                                                                                                                              |
 | `iou`      | `float`                   | `0.7`     | YOLOv8/YOLO11 HailoRT NMS IoU threshold                                                                                                                                     |
+| `device`   | `str`                     | `None`    | Device for the intermediate ONNX export step, CPU by default (`device=cpu`). The Dataflow Compiler steps do not use it.                                                     |
 
 YOLOv8/YOLO11 detection exports receive HailoRT NMS. YOLO26 defaults to raw one-to-many outputs for host NMS; `nms=False` selects its NMS-free one-to-one outputs. Segmentation, pose, and OBB use raw head tensors, classification returns on-chip probabilities, and semantic segmentation returns raw logits on Hailo-8/8L and all single-class heads or baked class maps for multi-class Hailo-10H/15 heads. Depth estimation returns the raw depth logit, which Ultralytics decodes into a metric depth map at inference. Dynamic shapes, embedded Ultralytics NMS, FP16, and FP32 are not supported.
 

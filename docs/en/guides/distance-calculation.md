@@ -99,8 +99,7 @@ Here's a table with the `DistanceCalculation` arguments:
 
 You can also make use of various `track` arguments in the `DistanceCalculation` solution.
 
-{% from "macros/solutions-track-args.md" import param_table %}
-{{ param_table(["tracker", "conf", "iou", "classes", "device"]) }}
+{% include "macros/solutions-track-args.md" %}
 
 Moreover, the following visualization arguments are available:
 
@@ -157,7 +156,7 @@ To delete points drawn during distance calculation with Ultralytics YOLO26, you 
 The key arguments for initializing the `DistanceCalculation` class in Ultralytics YOLO26 include:
 
 - `model`: Path to the YOLO26 model file.
-- `tracker`: Tracking algorithm to use (Solutions default to `botsort.yaml`).
+- `tracker`: Tracking algorithm to use (Solutions default to `tracktrack.yaml`).
 - `conf`: Confidence threshold for detections.
 - `show`: Flag to display the output.
 

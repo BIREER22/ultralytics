@@ -12,6 +12,8 @@ keywords: Ultralytics, YOLO26, model training, deep learning, object detection, 
 
 Training a [deep learning](https://www.ultralytics.com/glossary/deep-learning-dl) model involves feeding it data and adjusting its parameters so that it can make accurate predictions. Train mode in Ultralytics YOLO26 is engineered for effective and efficient training of object detection models, fully utilizing modern hardware capabilities. This guide aims to cover all the details you need to get started with training your own models using YOLO26's robust set of features. If you haven't installed Ultralytics yet, start with the [Quickstart guide](../quickstart.md).
 
+See the [unreleased YOLO27 preview](../models/yolo27.md#usage-examples) for planned training examples.
+
 <p align="center">
   <br>
   <iframe loading="lazy" width="720" height="405" src="https://www.youtube.com/embed/LNwODJXcvt4?si=7n1UvGRLSd9p5wKs"
@@ -211,7 +213,6 @@ The auto-selection algorithm prioritizes GPUs with:
 
 1. Lower current utilization percentages
 2. Higher available memory (free VRAM)
-3. Lower temperature and power consumption
 
 This feature is especially valuable in shared computing environments or when running multiple training jobs across different models. It automatically adapts to changing system conditions, ensuring optimal resource allocation without manual intervention.
 
@@ -248,7 +249,7 @@ While leveraging the computational power of the Apple silicon chips, this enable
 
 Resuming training from a previously saved state is a crucial feature when working with deep learning models. This can come in handy in various scenarios, like when the training process has been unexpectedly interrupted, or when you wish to continue training a model with new data or for more epochs.
 
-When training is resumed, Ultralytics YOLO loads the weights from the last saved model and also restores the optimizer state, [learning rate](https://www.ultralytics.com/glossary/learning-rate) scheduler, and the epoch number. This allows you to continue the training process seamlessly from where it was left off.
+When training is resumed, Ultralytics YOLO loads the weights from the last saved model and also restores the optimizer state, [learning rate](https://www.ultralytics.com/glossary/learning-rate) scheduler, epoch number, and dataset. This allows you to continue the training process seamlessly from where it was left off. Pass an explicit `data=` alongside `resume` to continue on a different dataset instead of the checkpoint's.
 
 You can easily resume training in Ultralytics YOLO by setting the `resume` argument to `True` when calling the `train` method, and specifying the path to the `.pt` file containing the partially trained model weights.
 
@@ -343,7 +344,7 @@ To use Comet:
         # pip install comet_ml
         import comet_ml
 
-        comet_ml.init()
+        comet_ml.login()
         ```
 
 Remember to sign in to your Comet account on their website and get your API key. You will need to add this to your environment variables or your script to log your experiments.

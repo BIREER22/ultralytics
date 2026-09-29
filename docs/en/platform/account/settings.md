@@ -10,16 +10,16 @@ title: Account Settings
 
 [Ultralytics Platform](https://platform.ultralytics.com) settings allow you to configure your profile, social links, workspace preferences, and manage your data with GDPR-compliant export and deletion options.
 
-Settings is organized into eight tabs (in order): `Profile`, `API Keys`, `Plans`, `Billing`, `Usage`, `Teams`, `Integrations`, and `Trash`.
+Settings is organized into nine tabs (in order): `Profile`, `API Keys`, `Plans`, `Billing`, `Usage`, `Referrals`, `Teams`, `Integrations`, and `Trash`.
 
-Settings is workspace-aware. Switch workspaces in the sidebar and every tab — profile, keys, billing, usage, members,
-integrations, and trash — shows data for the workspace you're in. On extra-wide screens a sidebar next to the tabs lists
-your five most recent training charges and payments.
+Settings is workspace-aware. Switch workspaces in the sidebar and the profile, keys, billing, usage, members,
+integrations, and trash tabs show data for the workspace you're in; referrals stay tied to your personal account. On
+extra-wide screens a sidebar next to the tabs lists your five most recent training charges and payments.
 
 ## Profile Tab
 
-The `Profile` tab contains your profile information, social links, data region, security, and account management
-options.
+The `Profile` tab contains your profile information, social links, data region, connected accounts, and account
+management options.
 
 ### Profile Information
 
@@ -71,7 +71,7 @@ In a team workspace the same card edits the workspace profile and icon, and requ
 
 ### Early Access
 
-Switch to your personal workspace using the sidebar workspace selector, then open **Settings > Profile** and enable **Early access** to try experimental features, including [Agents](../agents.md) at [platform.ultralytics.com/agents](https://platform.ultralytics.com/agents). This preference belongs to your account and also controls Agents access when you switch to a team workspace.
+Switch to your personal workspace using the sidebar workspace selector, then open **Settings > Profile** and enable **Early access** to opt in to experimental updates. The preference belongs to your account and follows you into team workspaces. [Agents](../agents.md) does not depend on it.
 
 ### Social Links
 
@@ -131,10 +131,8 @@ View your data region on the `Profile` tab:
 
 ### Security
 
-The `Profile` tab includes a Security card:
-
-- **Two-Factor Authentication**: marked **Coming Soon** in Platform settings
-- **Connected Accounts**: shows the OAuth provider linked to your sign-in
+The `Profile` tab includes a **Connected accounts** card that lists the Google and GitHub accounts linked to your
+sign-in. Click **Connect Google** or **Connect GitHub** to link another provider, or **Disconnect** to remove one.
 
 ### Storage Usage
 
@@ -204,6 +202,7 @@ The export is a single JSON file of metadata — images and model weights are no
 - Profile information
 - Storage usage records
 - Project metadata
+- Saved [Agents](../agents.md) workflows
 - Dataset metadata
 - Model metadata
 - Full activity history
@@ -242,8 +241,9 @@ are deleted automatically.
 
 ## API Keys Tab
 
-The `API Keys` tab lets you create and manage API keys for remote training and inference. Only the workspace owner can
-create, view, or revoke keys — a workspace key acts as the owner. See [API Keys](api-keys.md) for full documentation.
+The `API Keys` tab lets you create and manage API keys for remote training and inference, and stores provider keys for
+Agents and class-prompted annotation. Only the workspace owner can create, view, or revoke keys — a workspace key acts
+as the owner. See [API Keys](api-keys.md) for full documentation.
 
 ## Plans Tab
 
@@ -305,6 +305,22 @@ The `Usage` tab charts credit spend and storage for the active workspace.
 - **Storage card**: the same storage breakdown shown on the **Home** page (see [Storage Usage](#storage-usage))
 
 Grouping by user or API key makes it easy to see which team member or automation is consuming a shared team balance.
+
+## Referrals Tab
+
+The `Referrals` tab holds your personal referral link under the heading **Give $10, get $10**. Click **Copy link** and
+share it anywhere — the code is applied automatically at signup.
+
+- A friend who signs up with your link gets $10 in credits on top of the usual [signup credit](billing.md#free-plan)
+- You get $10 once they top up $10 in credits on their personal account; Pro subscriptions and team payments do not
+  count
+- Rewards land in your Platform balance as [Promo Bonus](billing.md#transaction-types) transactions
+- Each link covers up to 100 friends ($1,000 in rewards); the tab counts signups, qualified referrals, earned credit,
+  and signups used
+
+Referral rewards apply to new users only, one code per person. You cannot refer yourself or accounts you control, and
+the rewards are Platform credits with no cash value that cannot be transferred. A refund that drops a friend's paid
+top-ups below $10 reverses your reward, and that friend cannot earn another one.
 
 ## Teams Tab
 
@@ -435,8 +451,8 @@ If you signed up with email and password, use the password reset flow on the sig
 
 ### Is two-factor authentication available?
 
-Platform currently marks two-factor authentication as **Coming Soon** in its Security card. If you sign in through
-Google or GitHub, configure multi-factor authentication with that provider.
+Platform settings do not include a two-factor authentication option. If you sign in through Google or GitHub, configure
+multi-factor authentication with that provider.
 
 ### How long until deleted data is removed?
 
